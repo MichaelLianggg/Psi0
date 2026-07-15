@@ -218,6 +218,7 @@ show_usage() {
     echo "  --output-type TYPE      Set the output type (default: ros2)"
     echo "  --zmq-host HOST         Set the ZMQ host (default: localhost)"
     echo "  --default-motion NAME   Set the default motion to load on startup"
+    echo "  --hand-type TYPE        End effector: dex3, dex1, or none (default: dex3)"
     echo ""
     echo "Interface modes:"
     echo "  sim              Use loopback interface for simulation (MuJoCo)"
@@ -250,6 +251,7 @@ INPUT_TYPE_DEFAULT="manager"
 OUTPUT_TYPE_DEFAULT="all"
 ZMQ_HOST_DEFAULT="localhost"
 DEFAULT_MOTION_NAME_DEFAULT="neutral_kick_R_001__A543"
+HAND_TYPE_DEFAULT="dex3"
 
 # Initialize with defaults (will be set after parsing)
 CHECKPOINT="$CHECKPOINT_DEFAULT"
@@ -260,6 +262,7 @@ INPUT_TYPE="$INPUT_TYPE_DEFAULT"
 OUTPUT_TYPE="$OUTPUT_TYPE_DEFAULT"
 ZMQ_HOST="$ZMQ_HOST_DEFAULT"
 DEFAULT_MOTION_NAME="$DEFAULT_MOTION_NAME_DEFAULT"
+HAND_TYPE="$HAND_TYPE_DEFAULT"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -330,6 +333,14 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             DEFAULT_MOTION_NAME="$2"
+            shift 2
+            ;;
+        --hand-type)
+            if [[ "$2" != "dex1" && "$2" != "dex3" && "$2" != "none" ]]; then
+                echo -e "${RED}Error: --hand-type must be dex1, dex3, or none${NC}" >&2
+                exit 1
+            fi
+            HAND_TYPE="$2"
             shift 2
             ;;
         sim|real)
@@ -533,6 +544,7 @@ echo -e "  Input Type:         ${GREEN}$INPUT_TYPE${NC}"
 echo -e "  Output Type:        ${GREEN}$OUTPUT_TYPE${NC}"
 echo -e "  ZMQ Host:           ${GREEN}$ZMQ_HOST${NC}"
 echo -e "  Default Motion:     ${GREEN}$DEFAULT_MOTION_NAME${NC}"
+echo -e "  Hand Type:          ${GREEN}$HAND_TYPE${NC}"
 if [[ -n "$EXTRA_ARGS" ]]; then
 echo -e "  Extra Args:         ${GREEN}$EXTRA_ARGS${NC}"
 fi
@@ -549,6 +561,7 @@ echo -e "${BLUE}    --input-type $INPUT_TYPE \\${NC}"
 echo -e "${BLUE}    --output-type $OUTPUT_TYPE \\${NC}"
 echo -e "${BLUE}    --zmq-host $ZMQ_HOST \\${NC}"
 echo -e "${BLUE}    --default-motion $DEFAULT_MOTION_NAME${NC}"
+echo -e "${BLUE}    --hand-type $HAND_TYPE${NC}"
 if [[ -n "$EXTRA_ARGS" ]]; then
 echo -e "${BLUE}    $EXTRA_ARGS${NC}"
 fi
@@ -580,6 +593,7 @@ if [[ "$confirm" =~ ^[Yy]$ ]] || [[ -z "$confirm" ]]; then
             --output-type "$OUTPUT_TYPE" \
             --zmq-host "$ZMQ_HOST" \
             --default-motion "$DEFAULT_MOTION_NAME" \
+            --hand-type "$HAND_TYPE" \
             $EXTRA_ARGS
     else
         just run g1_deploy_onnx_ref "$TARGET" "$CHECKPOINT_DECODER" "$MOTION_DATA" \
@@ -589,7 +603,8 @@ if [[ "$confirm" =~ ^[Yy]$ ]] || [[ -z "$confirm" ]]; then
             --input-type "$INPUT_TYPE" \
             --output-type "$OUTPUT_TYPE" \
             --zmq-host "$ZMQ_HOST" \
-            --default-motion "$DEFAULT_MOTION_NAME"
+            --default-motion "$DEFAULT_MOTION_NAME" \
+            --hand-type "$HAND_TYPE"
     fi
 else
     echo ""

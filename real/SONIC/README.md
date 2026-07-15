@@ -57,6 +57,8 @@ bash ./real/SONIC/scripts/collect_psi0-sonic-data.sh       # real robot — reco
 
 Engage teleop and record per SONIC's [data collection tutorial](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/data_collection.html): calibration pose → **A+B+X+Y** → **A+X**, then **left grip + A** to start/stop an episode (**left grip + B** to discard).The data will be saved to `third_party/GR00T-WholeBodyControl/outputs/` in LeRobot format.
 
+After collection, follow the [SONIC data-processing guide](DATA_PROCESSING.md) to remove discarded episodes, merge sessions, update the task prompt, convert the data to the Ψ₀ schema, and calculate normalization statistics.
+
 No tmux? Run each component in its own terminal instead:
 
 ```bash

@@ -1,8 +1,8 @@
 #!/bin/bash
 
 export OMP_NUM_THREADS=32
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
-
+#export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 source .venv-psi/bin/activate
 
 NPROC_PER_NODE=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
@@ -30,7 +30,7 @@ finetune_real_psi0_config \
 --train.name=sonic \
 --train.data_parallel=ddp \
 --train.mixed_precision=bf16 \
---train.train_batch_size=16 \
+--train.train_batch_size=64 \
 --train.max_checkpoints_to_keep=5 \
 --train.gradient_accumulation_steps=1 \
 --train.learning_rate=1e-4 \
@@ -45,7 +45,7 @@ finetune_real_psi0_config \
 --train.lr_scheduler_kwargs.weight_decay=1e-6 \
 --train.lr_scheduler_kwargs.betas 0.95 0.999 \
 --log.report_to=wandb \
---data.root_dir=/hfm/data/sonic/lerobot \
+--data.root_dir=/home/liyan/Psi0/data/sonic/lerobot \
 --data.train_repo_ids=$task \
 --data.transform.field.stat-path=meta/stats_psi0.json \
 --data.transform.field.stat-action-key=action \
@@ -56,8 +56,8 @@ finetune_real_psi0_config \
 --data.transform.model.img-aug \
 --data.transform.model.resize.size 240 320 \
 --data.transform.model.center_crop.size 240 320 \
---model.model_name_or_path=/hfm/cache/checkpoints/psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
---model.pretrained-action-header-path=/hfm/cache/checkpoints/psi0/postpre.1by1.pad36.2601131206.ckpt.he30k \
+--model.model_name_or_path=/home/liyan/Psi0/cache/checkpoints/psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
+--model.pretrained-action-header-path=/home/liyan/Psi0/cache/checkpoints/psi0/postpre.1by1.pad36.2601131206.ckpt.he30k \
 --model.noise-scheduler=flow \
 --model.train-diffusion-steps=1000 \
 --model.n_conditions=0 \

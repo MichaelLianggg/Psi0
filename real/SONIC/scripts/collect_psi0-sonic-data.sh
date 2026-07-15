@@ -12,7 +12,7 @@
 #   ./collect_psi0-sonic-data.sh <ROBOT_IP>   # real robot at a specific IP
 
 ROBOT_IP=192.168.123.164
-TASK="Pick bottle and turn and pour into cup."
+TASK="Pick up the box and turn left and place it in the table"
 FPS=30   # recording frequency (Hz); 30 matches the RealSense camera so no duplicate frames
 
 # Everything lives in the GR00T-WholeBodyControl (sonic) submodule root.
