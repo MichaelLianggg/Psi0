@@ -2,3 +2,9 @@
 	path = third_party/SIMPLE
 	url = git@github.com:physical-superintelligence-lab/SIMPLE.git
 	branch = main
+[submodule "third_party/GR00T-WholeBodyControl"]
+	path = third_party/GR00T-WholeBodyControl
+	url = https://github.com/MichaelLianggg/GR00T-WholeBodyControl.git
+[submodule "third_party/IsaacTeleop"]
+	path = third_party/IsaacTeleop
+	url = https://github.com/NVIDIA/IsaacTeleop.git
