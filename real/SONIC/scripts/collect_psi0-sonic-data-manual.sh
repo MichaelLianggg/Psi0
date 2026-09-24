@@ -7,6 +7,7 @@
 #   bash ./real/SONIC/scripts/collect_psi0-sonic-data-manual.sh deploy     # 1) C++ controller
 #   bash ./real/SONIC/scripts/collect_psi0-sonic-data-manual.sh pico        # 2) normal PICO streamer
 #   bash ./real/SONIC/scripts/collect_psi0-sonic-data-manual.sh pico_mirror # 2) mirrored PICO streamer
+#   bash ./real/SONIC/scripts/collect_psi0-sonic-data-manual.sh pico_video PICO_IP # robot view
 #   bash ./real/SONIC/scripts/collect_psi0-sonic-data-manual.sh exporter   # 3) data exporter (records)
 #
 # Simulation teleop test (no robot/camera, no recording):
@@ -38,7 +39,19 @@ case "$1" in
         ;;
     pico_mirror)
         source .venv_teleop/bin/activate
-        python gear_sonic/scripts/pico_manager_thread_server_mirror.py --manager
+        python gear_sonic/scripts/pico_manager_thread_server_mirror.py --manager --vis_vr3pt --vis_smpl
+        ;;
+    pico_video)
+        if [ -z "$2" ]; then
+            echo "Usage: $0 pico_video <PICO_IP>"
+            exit 1
+        fi
+        source .venv_data_collection/bin/activate
+        python gear_sonic/scripts/stream_camera_to_pico.py \
+            --camera-host "$ROBOT_IP" \
+            --camera-port 5555 \
+            --pico-ip "$2" \
+            --fps "$FPS"
         ;;
     exporter)
         source .venv_data_collection/bin/activate
@@ -46,9 +59,11 @@ case "$1" in
             --camera-host "$ROBOT_IP" \
             --task-prompt "$TASK" \
             --data-collection-frequency "$FPS"
+                --task-prompt "pick up the box, walk back turn left, and place it in another table" \
+            #--record-wrist-cameras
         ;;
     *)
-        echo "Usage: $0 {sim|deploy [sim]|pico|pico_mirror|exporter}   (run each in its own terminal)"
+        echo "Usage: $0 {sim|deploy [sim]|pico|pico_mirror|pico_video <PICO_IP>|exporter}"
         exit 1
         ;;
 esac

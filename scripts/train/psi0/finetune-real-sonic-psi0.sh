@@ -34,7 +34,7 @@ finetune_real_psi0_config \
 --train.max_checkpoints_to_keep=5 \
 --train.gradient_accumulation_steps=1 \
 --train.learning_rate=1e-4 \
---train.max_training_steps=40000 \
+--train.max_training_steps=60000 \
 --train.warmup_ratio=None \
 --train.warmup_steps=1000 \
 --train.checkpointing_steps=5000 \
