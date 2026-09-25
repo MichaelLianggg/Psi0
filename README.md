@@ -1,712 +1,845 @@
-<h1 align="center">[RSS26'] Ψ₀: An Open Foundation Model <br/> Towards Universal Humanoid Loco-Manipulation
-</h1>
+# Ψ0 + SONIC on Unitree G1
 
-<p align="center">
-  <img src="assets/media/teaser.jpg" alt="Psi0 teaser image" />
-</p>
+End-to-end instructions for collecting demonstrations with SONIC teleoperation, converting the recorded data to the Ψ0 LeRobot schema, fine-tuning Ψ0, and deploying the resulting policy on a real Unitree G1 with DEX1 grippers and a RealSense camera.
 
-<div align="center">
+This README covers four stages:
 
-[![arXiv](https://img.shields.io/badge/arXiv-2603.12263-df2a2a.svg)](https://arxiv.org/abs/2603.12263)
-[![Static Badge](https://img.shields.io/badge/Project-Page-a)](https://psi-lab.ai/Psi0)
-[![Model](https://img.shields.io/badge/Hugging%20Face-Model-yellow)](https://huggingface.co/USC-PSI-Lab/psi-model)
-[![Data](https://img.shields.io/badge/Hugging%20Face-Data-pink)](https://huggingface.co/datasets/USC-PSI-Lab/psi-data)
-[![License](https://img.shields.io/badge/License-Apache2.0-blue.svg)](./LICENSE)
+1. SONIC teleoperation and data collection.
+2. Dataset merge, prompt setup, conversion, statistics, and verification.
+3. Ψ0 fine-tuning and checkpoint selection.
+4. Real-robot deployment and shutdown.
 
-</div>
+> [!WARNING]
+> This guide controls a physical robot. Secure the G1 to the gantry before operation, keep the workspace clear, make sure a physical emergency stop is accessible, and keep personnel outside the robot's motion envelope while the controller is active. The software stop commands documented below are operational controls and should not be treated as a replacement for the robot's physical emergency-stop procedure. Stop the run if camera, network, controller, or state feedback becomes unstable.
 
-Contributors: [Songlin Wei](https://songlin.github.io/), [Hongyi Jing](https://hongyijing.me/), [Boqian Li](https://boqian-li.github.io/), [Zhenyu Zhao](https://zhenyuzhao.com/), [Jiageng Mao](https://pointscoder.github.io/), [Zhenhao Ni](https://nizhenhao-3.github.io/) , [Sicheng He](https://hesicheng.net/), [Jie Liu](https://jie0530.github.io/), [Xiawei Liu](https://www.xiaweiliu.com/), Kaidi Kang,  Sheng Zang,[Weiduo Yuan](https://weiduoyuan.com/), [Marco Pavone](https://profiles.stanford.edu/marco-pavone), Di Huang, [Yue Wang](https://yuewang.xyz/)
+## Prerequisites
 
--------
+### Hardware
 
-$\Psi_0$ is an open vision-language-action (VLA) model for dexterous humanoid loco-manipulation. Our model first learns task semantics and visual representation from large-scale human egocentic videos, and then is post-trained on a smaller amount of real-world teleoperated robot data, to learn general dynamics of the embodiment. 
+- Unitree G1 robot secured to a gantry.
+- DEX1 grippers.
+- RealSense camera on the robot.
+- PICO setup for teleoperation.
+- Workstation with an NVIDIA GPU suitable for Ψ0 fine-tuning/inference.
+- Robot/workstation network connectivity.
 
-<details>
-<summary>[Optional] Expand to know more about Ψ₀.</summary>
+### Software and environments
 
-Our foundation model is capable of acquiring new long-horizontal dexterous loco-manipulation skill by fine-tuning using as few as 80 trajectories. ***Our key finding is that scaling the right data in the right way.***
+The commands below assume the following are already installed and configured:
 
-At the top, the $\Psi_0$ model consists of two end-to-end trained components: a vision–language backbone (System-2) and a multimodal diffusion transformer (System-1) action expert. The backbone is based on Qwen’s Qwen3-VL-2B-Instruct, which extracts vision–language features from observations and instructions. These features condition a flow-based multimodal diffusion transformer inspired by Stable Diffusion 3. The action expert (≈500M parameters) predicts future whole-body action chunks, enabling efficient fusion of visual, linguistic, and action representations. At the lowest level (System-0), an RL-based tracking controller executes the predicted lower-body action commands, ensuring stable and precise physical control.
+- The `Psi0` repository at `/home/liyan/Psi0` (also referenced as `~/Psi0`).
+- `third_party/GR00T-WholeBodyControl` and its SONIC deployment/data-collection dependencies.
+- ROS 2 Foxy on the robot-side workflow used here.
+- Docker and NVIDIA GPU/container support on the workstation.
+- TensorRT at `~/TensorRT`.
+- Conda environment `vision` on the robot.
+- Ψ0 Python environment `.venv-psi`.
+- SONIC data-collection environment `.venv_data_collection`.
+- SONIC teleoperation environment `.venv_teleop` if simulation is used.
+- `jq` for dataset verification.
+- `rg` (ripgrep) for optional configuration inspection.
+- Weights & Biases only if W&B logging is enabled.
 
-<p align="center">
-  <img src="assets/media/arch.png" alt="Psi0 model" />
-</p>
-</details>
+Unless stated otherwise, run workstation commands from the machine that contains the `Psi0` checkout.
 
-<p></p>
+## Contents
 
-## 📢 News & Updates
+- [0. End-to-End Workflow](#0-end-to-end-workflow)
+- [Part I — SONIC Teleoperation & Data Collection](#part-i--sonic-teleoperation--data-collection)
+- [Part II — Prepare SONIC Data for Ψ0](#part-ii--prepare-sonic-data-for-ψ0)
+- [Part III — Fine-Tune Ψ0](#part-iii--fine-tune-ψ0)
+- [Part IV — Deploy Fine-Tuned Ψ0 on the Real G1](#part-iv--deploy-fine-tuned-ψ0-on-the-real-g1)
+- [Part V — Quick Reference](#part-v--quick-reference)
+- [Important Notes](#important-notes)
 
-* [2026-06-13] Released SONIC integration for Psi-0.
-* [2026-06-03] 🎉🎉🎉 Psi-0 won the Best Paper Award at the 2nd 3D-LLM/VLA Workshop at CVPR 2026.
+---
 
+## 0. End-to-End Workflow
 
+```text
+G1 + SONIC Teleoperation
+        ↓
+Record SONIC episodes
+        ↓
+Merge recording sessions
+        ↓
+Set task prompt
+        ↓
+Convert SONIC → Ψ0 LeRobot schema
+        ↓
+Calculate dataset statistics
+        ↓
+Verify dataset
+        ↓
+Fine-tune Ψ0
+        ↓
+Select checkpoint
+        ↓
+Start G1 + SONIC controller
+        ↓
+Start Ψ0 policy server
+        ↓
+Start SONIC communication client
+        ↓
+Real-robot inference
+```
 
-## Table of Contents
-<!-- - [Installation](#-environment-setup) -->
-<!-- - [Pre- & Post- Training](#-) -->
-<!-- - [Data Pre-Processing](#-) -->
-- [Finetune Ψ₀ on Unitree G1 Humanoid Robot](#finetune-psi0)
-  - [Installation](#installation)
-  - [Data Collection](#data-collection)
-  - [Fine-Tuning](#training-real)
-  - [Open-Loop Evaluation](#open-loop-evaluation)
-  - [Deployment](#deployment)
-  - [Ψ₀ with SONIC](#psi0-sonic)
-- [Baselines](#baselines)
-  - [GR00T N1.6](#groot-n16)
-  - [OpenPi π0.5](#openpi-05)
-  - [InternVLA-M1](#internvla-m1)
-  - [H-RDT](#h-rdt)
-  - [EgoVLA](#egovla)
-  - [Diffusion Policy](#diffusion-policy)
-  - [ACT](#act) 
-- [Simulation 🚀🚀🚀](#simulation)
-  - [Install SIMPLE](#install-simple)
-  - [Data Generation](#data-generation)
-  - [Fine-Tuning](#training-sim)
-  - [Evaluation in SIMPLE](#evaluation-in-simple)
-- [Reproduce Ψ₀: Pre-Training and Post-Training](#pre-post-train)
-- [Checkpoints](#checkpoints)
-- [Troubleshootings](#troubleshootings)
-- [Citation](#️-citation)
+---
 
-<a id="finetune-psi0"></a>
-## Finetune Ψ₀ on Unitree G1 Humanoid Robot
+## Part I — SONIC Teleoperation & Data Collection
 
-### Installation
+### 1. Start the G1 Robot
 
-Clone the project and change directory to the project root:
+1. Secure the G1 robot to the gantry and make sure both feet are in contact with the ground.
+
+2. Press the power button briefly, then press and hold it again until the blue light on the head turns on and stops blinking.
+
+3. Wait for calibration to finish. The robot light should then turn **purple**.
+
+---
+
+### 2. Robot Terminal 1 — Start the RealSense Camera for Teleoperation
+
+SSH into the robot:
+
 ```bash
-git clone git@github.com:physical-superintelligence-lab/Psi0.git 
-cd Psi0
+ssh unitree@192.168.123.164
 ```
-We use [uv](https://docs.astral.sh/uv/getting-started/installation/) to manage Python dependencies. Install `uv` if not already installed:
+
+Password:
+
+```text
+123
+```
+
+If prompted to select the ROS version, choose:
+
+```text
+1
+```
+
+for ROS 2 Foxy.
+
+Start the camera:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+conda activate vision
+cd ~/SONIC_psi0_release
+python -m gear_sonic.camera.composed_camera --ego-view-camera realsense --port 5555
 ```
 
-Set up the $\Psi_0$ environment:
+Check that port `5555` is listening:
 
-> ℹ️ We manage the $\Psi_0$ environment and all the baselines through `uv` and they all share the same `src/` code.  See [Environment Management](baselines/README.md) for more details.
-
+```bash
+ss -ltnp | grep :5555
 ```
-uv venv .venv-psi --python 3.10
+
+If an old process is occupying the port:
+
+```bash
+kill -9 <PID>
+```
+
+Keep this terminal running.
+
+---
+
+### 3. Robot Terminal 2 — Start the DEX1 Gripper Server
+
+Open another terminal connected to the robot and run:
+
+```bash
+cd dex1_1_service/bin
+sudo ./dex1_1_gripper_server --network eth0
+```
+
+Keep this terminal running.
+
+---
+
+### 4. Workstation Terminal 1 — Start the SONIC Controller
+
+```bash
+cd ~/Psi0/third_party/GR00T-WholeBodyControl/gear_sonic_deploy
+export TensorRT_ROOT=$HOME/TensorRT
+./docker/run-ros2-dev.sh
+```
+
+Inside the container:
+
+```bash
+source scripts/setup_env.sh
+./deploy.sh --input-type zmq_manager real --hand-type dex1
+```
+
+Wait until you see:
+
+```text
+Init done
+```
+
+Keep this terminal running.
+
+---
+
+### 5. Workstation Terminal 2 — Start PICO Teleoperation
+
+```bash
+cd ~/Psi0
+bash ./real/SONIC/scripts/collect_psi0-sonic-data-manual.sh pico
+```
+
+Alternative mirrored mode:
+
+```bash
+bash ./real/SONIC/scripts/collect_psi0-sonic-data-manual.sh pico_mirror
+```
+
+Keep this terminal running.
+
+---
+
+### 6. Workstation Terminal 3 — Start the Data Exporter
+
+```bash
+cd ~/Psi0
+bash ./real/SONIC/scripts/collect_psi0-sonic-data-manual.sh exporter
+```
+
+Keep this terminal running.
+
+---
+
+### 7. Start Teleoperation
+
+After all robot-side and workstation-side processes above are running:
+
+1. Put the robot in the calibration pose.
+
+2. Press:
+
+```text
+A + B + X + Y
+```
+
+This performs calibration / engages the policy state.
+
+3. Press:
+
+```text
+A + X
+```
+
+to enable teleoperation / toggle into POSE mode.
+
+#### Controller Shortcuts
+
+| Action | Button | Notes |
+|---|---|---|
+| **Start / Stop policy** | **A+B+X+Y** | First press: engage + CALIB_FULL. Again: emergency stop → OFF. |
+| **Toggle POSE** | **A+X** | Switches between PLANNER ↔ POSE. Or from VR_3PT entered through PLANNER → POSE. |
+| **Toggle PLANNER_FROZEN_UPPER** | **B+Y** | Switches between POSE ↔ PLANNER_FROZEN_UPPER. Or from VR_3PT entered through PLANNER_FROZEN_UPPER → POSE. |
+
+---
+
+### 8. Record Episodes
+
+Start / stop recording:
+
+```text
+Left Grip + A
+```
+
+Discard the current episode:
+
+```text
+Left Grip + B
+```
+
+Repeat the task for as many successful episodes as needed.
+
+---
+
+### 9. Teleoperation Checklist
+
+**Robot**
+
+- [ ] Camera running.
+- [ ] DEX1 server running.
+
+**Workstation**
+
+- [ ] Terminal 1: SONIC controller → `Init done`.
+- [ ] Terminal 2: PICO teleoperation running.
+- [ ] Terminal 3: exporter running.
+
+---
+
+### 10. Optional — Run SONIC in Simulation
+
+Start the simulator:
+
+```bash
+cd ~/Psi0/third_party/GR00T-WholeBodyControl
+source .venv_teleop/bin/activate
+python gear_sonic/scripts/run_sim_loop.py
+```
+
+In the deploy terminal use:
+
+```bash
+./deploy.sh --input-type zmq_manager sim
+```
+
+---
+
+## Part II — Prepare SONIC Data for Ψ0
+
+### 11. Set Common Paths
+
+Set the common paths used by the dataset and training commands:
+
+```bash
+cd /home/liyan/Psi0
+export PSI_HOME=/home/liyan/Psi0
+export task=merged_orange
+```
+
+`$task` is used later as the merged dataset directory / repo ID. Keep this value unchanged throughout merge, conversion, training, and verification for a single experiment.
+
+---
+
+### 12. Merge SONIC Recording Sessions
+
+Activate the data-collection environment:
+
+```bash
+cd "$PSI_HOME/third_party/GR00T-WholeBodyControl"
+source .venv_data_collection/bin/activate
+```
+
+Merge the selected recording sessions:
+
+```bash
+python gear_sonic/scripts/process_dataset.py \
+  --dataset-path \
+    outputs/2026-07-24-16-59-38 \
+    outputs/2026-07-25-15-12-42 \
+    outputs/2026-07-25-16-22-27 \
+    outputs/2026-07-24-17-08-05 \
+    outputs/2026-07-25-15-25-17 \
+    outputs/2026-07-25-16-34-58 \
+    outputs/2026-07-25-14-52-14 \
+    outputs/2026-07-25-15-42-38 \
+  --output-path "outputs/$task"
+```
+
+The processor removes discarded episodes and stale SMPL frames by default. It does not modify the source datasets. Before running the command, confirm that the listed recording-session directories are the sessions you want to merge.
+
+After merging, confirm that the output directory exists before editing metadata:
+
+```bash
+ls -lah "$PSI_HOME/third_party/GR00T-WholeBodyControl/outputs/$task"
+```
+
+---
+
+### 13. Set the Training Prompt
+
+Update the task prompt in both metadata files in the merged dataset:
+
+```text
+$PSI_HOME/third_party/GR00T-WholeBodyControl/outputs/$task/meta/tasks.jsonl
+$PSI_HOME/third_party/GR00T-WholeBodyControl/outputs/$task/meta/episodes.jsonl
+```
+
+Keep the language instruction consistent across the two metadata files. For `tasks.jsonl`, the guide provides this example entry:
+
+```json
+{"task_index": 0, "task": "Walk forward, pick up the box with both hands, step back, turn left, and place the box on the table."}
+```
+
+The source material does not provide a complete example row for `episodes.jsonl`. Preserve its existing schema and update the instruction text consistently rather than replacing the whole row with the `tasks.jsonl` example.
+
+---
+
+### 14. Convert SONIC Data to the Ψ0 LeRobot Schema
+
+The merged SONIC dataset is already LeRobot v2.1, but Ψ0 requires different state, action, and camera fields.
+
+Activate the Ψ0 environment and convert the dataset:
+
+```bash
+cd "$PSI_HOME"
 source .venv-psi/bin/activate
-GIT_LFS_SKIP_SMUDGE=1 uv sync \
-  --group serve \
-  --group viz \
-  --group psi \
-  --index-strategy unsafe-best-match \
-  --active
-uv pip install flash_attn==2.7.4.post1 --no-build-isolation
-```
-
-> If you want to support `SIMPLE` evaluation, you can use the following commands to install `SIMPLE` along with `Psi0`. See also [quickstart](examples/quick_start/psi.md).
-
-```
-git submodule update --init --recursive
-GIT_LFS_SKIP_SMUDGE=1 uv sync --all-groups --index-strategy unsafe-best-match --active
-uv pip install flash_attn==2.7.4.post1 --no-build-isolation
-UV_PROJECT_ENVIRONMENT=${pwd}/.venv-psi ./scripts/install_curobo.sh
-```
-
-Test installation, a version number should be displayed.
-```bash
-python -c "import psi;print(psi.__version__);"
-```
-
-Verify `SIMPLE` installation
-``` bash
-python -c "import simple; print(simple.__version__)"
-```
-
-Verify the shared `lerobot` stack is importable.
-```bash
-python -c "from psi.data.lerobot.compat import LEROBOT_LAYOUT; print(LEROBOT_LAYOUT)"
-```
-
-### Data Collection
-> 📂 We open-sourced all the 9 real-world tasks. You can directly download the data and jump to the [Fine-Tuning](#training-real).
-
-See the detailed teleoperation guide here:  
-[Real-World Deployment Guide](real/README.md#real-world-deployment)
-
-
-#### Pre-Processing: Convert Raw Data to LeRobot Format
-
-```
-export task=Hug_box_and_move
-
-hf download USC-PSI-Lab/psi-data \
-  g1_real_raw/$task.zip \
-  --local-dir=$PSI_HOME/data/real_teleop_g1 \
-  --repo-type=dataset
-
-unzip $PSI_HOME/data/real_teleop_g1/g1_real_raw/$task.zip -d $PSI_HOME/data/real_teleop_g1/g1_real_raw/$task
-```
-You should observe similar folder structure:
-
-```
-g1_real_raw
-└── Hug_box_and_move
-    ├── episode_0
-    │   ├── color
-    │   │   ├── frame_000000.jpg
-    │   │   └── ...
-    │   └── data.json
-    └── ...
-```
-
-Edit the task description file with the following format, eg.,
-```
-vim scripts/data/task_description_dict.json
-```
-```
-{
-  "Hug_box_and_move": "Hug box and move."
-}
-```
-
-Run conversion script
-```
-python scripts/data/raw_to_lerobot.py \
-  --data-root=$PWD/data/real_teleop_g1/g1_real_raw \
-  --work-dir=$PWD/data/real \
-  --repo-id=psi0-real-g1 \
-  --robot-type=g1 \
-  --task=$task
-```
-
-Calculate stats
-```
-python scripts/data/calc_modality_stats.py \
-  --work-dir=$PSI_HOME/data/real \
-  --task=$task
-```
-
-Create **$\Psi_0$** format stats (simply a copy for now)
-```
-cp $PSI_HOME/data/real/$task/meta/stats.json $PSI_HOME/data/real/$task/meta/stats_psi0.json
-```
-
-Now it's ready to finetune $\Psi_0$.
-
-> ✈️ If training env is already configured, directly launch training via `scripts/train/psi0/finetune-real-psi0.sh $task`
-
-
-<a id="training-real"></a>
-### Fine-Tuning
-
-> ✔️ Suppose the data is already collected and processed. Now we can proceed to fine-tune the $\Psi_0$ model.
-
->  There is a [known issue](https://github.com/physical-superintelligence-lab/Psi0/issues/3) of loading our real data, apply this fix first `python scripts/data/patch_lerobot_meta.py $PSI_HOME/data/real/$task`
-
-> 📝 Here we illustrate by using the pre-collected data from [Huggingface psi-data](https://huggingface.co/datasets/USC-PSI-Lab/psi-data/tree/main/real).
-
-Set up the environment variables following `.env.sample`. The environment variables will be loaded by the `dotenv.load_dotenv()` in python.
-```
-cp .env.sample .env
-# and edit the following env variables 
-# HF_TOKEN=<YOUR HF READ TOKEN>
-# WANDB_API_KEY=<API KEY for wandb logging>
-# WANDB_ENTITY=<wandb entity>
-# PSI_HOME=<Path where PSI cache/checkpoint/data are located by convention>
-
-source .env
-echo $PSI_HOME
-```
-
-Download the collected real-world data and extract it:
-```
-export task=Pick_bottle_and_turn_and_pour_into_cup
-
-hf download USC-PSI-Lab/psi-data \
-  real/$task.zip \
-  --local-dir=$PSI_HOME/data \
-  --repo-type=dataset
-
-unzip $PSI_HOME/data/real/$task.zip -d $PSI_HOME/data/real
-```
-> 👀 If you want to visualize the episode please refer to the [Data Visualization](examples/visualize.md) in the examples.
-
-Launch the training script:
-```
-scripts/train/psi0/finetune-real-psi0.sh $task
-```
-
-> 🖥️ You can always change the GPUs, e.g., `CUDA_VISIBLE_DEVICES=0,1,2,3 scripts/train/...`.  
-
-> ⚠️ Please try to maintain a reasonable global batch size = device batch size x number of GPUs x gradient accumulation step. We use global batch size 128 throughout all the real-world and simulation experiments.
-
-
-### Open-Loop Evaluation
-> Follow the steps in `examples/simple/openloop_eval.ipynb`
-
-Load the training dataset, and run model inference to see how model fits the training data.
-
-### Deployment
-
-#### Serve $\Psi_0$ (RTC mode)
-
-```bash
-bash ./scripts/deploy/serve_psi0-rtc.sh
-```
-
-#### Start $\Psi_0$ Client (RTC mode)
-
-```bash
-bash ./real/scripts/deploy_psi0-rtc.sh
-```
-
-For detailed real-world deployment environment setup, please also refer to the dedicated documentation:
-
-[Real-World Teleoperation Guide](real/README.md)
-
-
-<a id="psi0-sonic"></a>
-### Ψ₀ with SONIC
-
-[SONIC](https://github.com/NVlabs/GR00T-WholeBodyControl) is a powerful whole-body controller for humanoid robots. $\Psi_0$ now supports data collection, fine-tuning, and deployment with SONIC. Please use [our fork](https://github.com/physical-superintelligence-lab/GR00T-WholeBodyControl/tree/main) to avoid any compatibility issues.
-
-Initialize the SONIC submodule first:
-
-```bash
-git submodule update --init --recursive third_party/GR00T-WholeBodyControl
-```
-
-For the full environment setup — workstation venvs, TensorRT + C++ build, PICO/XRoboToolkit, and the robot-side camera server — see the **[SONIC real-world teleoperation guide](real/SONIC/README.md)**.
-
-#### Data collection
-
-Please follow the [SONIC real-world teleoperation guide](real/SONIC/README.md#data-collection) to record demonstrations.
-
-Datasets are saved locally under `third_party/GR00T-WholeBodyControl/outputs/<dataset-name>/` in LeRobot format.
-
-#### Pre-Processing: Convert to $\Psi_0$ LeRobot Format
-
-Convert the SONIC-collected dataset into the $\Psi_0$ LeRobot format:
-
-```bash
-export task=<dataset-name>
-
 python scripts/data/raw_sonic_to_psi_lerobot.py \
-  --data-root=third_party/GR00T-WholeBodyControl/outputs/$task \
-  --work-dir=$PSI_HOME/data/sonic/lerobot \
-  --repo-id=$task \
+  --data-root="$PSI_HOME/third_party/GR00T-WholeBodyControl/outputs/$task" \
+  --work-dir="$PSI_HOME/data/sonic/lerobot" \
+  --repo-id="$task" \
   --robot-type=g1
 ```
 
-Calculate stats
+The converted dataset is written to:
+
+```text
+$PSI_HOME/data/sonic/lerobot/$task
+```
+
+With the example values in Section 11, this resolves to:
+
+```text
+/home/liyan/Psi0/data/sonic/lerobot/merged_orange
+```
+
+---
+
+### 15. Calculate Ψ0 Dataset Statistics
+
 ```bash
 python scripts/data/calc_modality_stats.py \
-  --work-dir=$PSI_HOME/data/sonic/lerobot \
-  --task=$task
+  --task-dir="$PSI_HOME/data/sonic/lerobot/$task"
+cp "$PSI_HOME/data/sonic/lerobot/$task/meta/stats.json" \
+   "$PSI_HOME/data/sonic/lerobot/$task/meta/stats_psi0.json"
 ```
 
-Create **$\Psi_0$** format stats (simply a copy for now)
+The copy is required because the training configuration expects:
+
+```text
+meta/stats_psi0.json
+```
+
+---
+
+### 16. Verify the Converted Dataset
+
 ```bash
-cp $PSI_HOME/data/sonic/lerobot/$task/meta/stats.json $PSI_HOME/data/sonic/lerobot/$task/meta/stats_psi0.json
+DATASET="$PSI_HOME/data/sonic/lerobot/$task"
+jq '{total_episodes, total_frames, total_tasks}' "$DATASET/meta/info.json"
+jq -s 'map(.task) | unique' "$DATASET/meta/tasks.jsonl"
+jq -s 'map(.instruction) | unique' "$DATASET/meta/episodes.jsonl"
+ls -lh "$DATASET/meta/stats.json" "$DATASET/meta/stats_psi0.json"
 ```
 
-Now it's ready to fine-tune.
+Example counts from the dataset used when this guide was written:
 
-#### Finetune $\Psi_0$ with SONIC
+```text
+total_episodes: 34
+total_frames: 30816
+total_tasks: 1
+```
+
+These values are only an example. Newly collected datasets can have different episode and frame counts.
+
+---
+
+## Part III — Fine-Tune Ψ0
+
+### 17. Optional — Configure Weights & Biases (W&B)
+
+W&B can be used to monitor training and validation loss.
 
 ```bash
-bash ./scripts/train/psi0/finetune-real-sonic-psi0.sh $task
+cd "$PSI_HOME"
+source .venv-psi/bin/activate
+pip install wandb
+wandb login
 ```
 
-#### Deploy $\Psi_0$ with SONIC
+When prompted, paste the API key from the W&B account settings page. Do not put the API key in this guide or commit it to Git.
 
-Please follow the [SONIC real-world deployment guide](real/SONIC/DEPLOYMENT.md) for detailed instructions.
+Create a local `.env` in the Ψ0 repository root and make sure it is ignored by Git:
 
-##### Serve Policy Server of $\Psi_0$ with SONIC (RTC mode)
+```bash
+export WANDB_MODE=online
+export WANDB_PROJECT=sonic-psi0
+export WANDB_ENTITY="<your-wandb-username-or-team>"
+export WANDB_NAME=orange-box-pickup
+```
+
+Load it before training:
+
+```bash
+source .env
+wandb login --verify
+```
+
+If needed, check whether the training configuration reports metrics to W&B:
+
+```bash
+rg "wandb|report_to|WANDB" scripts configs
+```
+
+For a machine without network access:
+
+```bash
+export WANDB_MODE=offline
+```
+
+Later, when network access is available:
+
+```bash
+wandb sync "<offline-run-directory>"
+```
+
+---
+
+### 18. Check Training Prerequisites
+
+Before starting training, verify that:
+
+- [ ] The Ψ0 environment is active: `source .venv-psi/bin/activate`.
+- [ ] The converted dataset exists at `$PSI_HOME/data/sonic/lerobot/$task`.
+- [ ] `meta/info.json`, `meta/tasks.jsonl`, and `meta/episodes.jsonl` are present.
+- [ ] Both `meta/stats.json` and `meta/stats_psi0.json` exist.
+- [ ] The dataset task/instruction values match the task you intend to train.
+- [ ] The selected GPU is visible to CUDA.
+- [ ] If W&B logging is enabled, the W&B environment variables are loaded and authentication succeeds.
+
+The verification commands in Section 16 should complete successfully before training.
+
+---
+
+### 19. Fine-Tune Ψ0
+
+Run from the Ψ0 repository root.
+
+Single GPU example:
+
+```bash
+cd "$PSI_HOME"
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/train/psi0/finetune-real-sonic-psi0.sh \
+  "$task" \
+  orange-box-pickup
+```
+
+Arguments:
+
+```text
+1st argument: dataset directory name
+2nd argument: experiment name
+```
+
+The experiment name does **not** change the language instruction stored in the dataset metadata.
+
+#### If GPU Memory Is Insufficient
+
+The training script contains:
+
+```bash
+--train.train_batch_size=64
+```
+
+If training runs out of GPU memory, try reducing the batch size to:
+
+```text
+8
+4
+2
+```
+
+Do not change gradient accumulation unless you intentionally want to change the effective batch size.
+
+---
+
+### 20. Monitor Training and Select a Checkpoint
+
+Monitor training and validation loss in the terminal or W&B.
+
+Select a checkpoint with good validation loss rather than automatically assuming the final checkpoint is the best one.
+
+The training log prints the run directory as:
+
+```text
+Accelerator runs in: <run-directory>
+```
+
+Record both:
+
+```text
+CHECKPOINT_DIR=<run-directory>
+CHECKPOINT_STEP=<selected-step>
+```
+
+You will use them in deployment.
+
+---
+
+## Part IV — Deploy Fine-Tuned Ψ0 on the Real G1
+
+> [!NOTE]
+> This section uses the **deployment-specific** camera and SONIC controller commands. They are different from the teleoperation/data-collection commands in Part I.
+
+### 21. Start the G1 Robot
+
+1. Secure the G1 robot to the gantry and make sure both feet are in contact with the ground.
+
+2. Press the power button briefly, then press and hold it again until the blue light on the head turns on and stops blinking.
+
+3. Wait for calibration to finish. The robot light should then turn **purple**.
+
+---
+
+### 22. Robot Terminal 1 — Start the Deployment RealSense Camera Server
+
+SSH into the robot:
+
+```bash
+ssh unitree@192.168.123.164
+```
+
+Password:
+
+```text
+123
+```
+
+If prompted, choose:
+
+```text
+1
+```
+
+for ROS 2 Foxy.
+
+Start the deployment camera server:
+
+```bash
+conda activate vision
+cd ~/SONIC_psi0_release
+python realsense_server.py
+```
+
+If an old video hub process is running, stop it before restarting the camera server:
+
+```bash
+sudo pkill -f videohub_pc4
+```
+
+Keep this terminal running.
+
+---
+
+### 23. Robot Terminal 2 — Start the DEX1 Gripper Server
+
+Open another terminal connected to the robot:
+
+```bash
+ssh unitree@192.168.123.164
+```
+
+Start the gripper server:
+
+```bash
+cd dex1_1_service/bin
+sudo ./dex1_1_gripper_server --network eth0
+```
+
+Keep this terminal running.
+
+---
+
+### 24. Workstation Terminal 1 — Start the SONIC Controller for Deployment
+
+If Docker permission has not been configured for the current user, run once:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+Set TensorRT and start the ROS 2 development container:
+
+```bash
+export TensorRT_ROOT=~/TensorRT
+cd ~/Psi0/third_party/GR00T-WholeBodyControl/gear_sonic_deploy
+./docker/run-ros2-dev.sh
+```
+
+Inside the container:
+
+```bash
+source scripts/setup_env.sh
+./deploy.sh real --hand-type dex1
+```
+
+Wait until you see:
+
+```text
+Init done
+```
+
+Then, in the same terminal:
+
+1. Press `#` to set the robot upright.
+
+2. Press `]` after the robot has reached the required position. The robot will stand up when you press `]`.
+
+3. Wait until you see:
+
+```text
+transitioning to CONTROL state
+```
+
+4. Press **Enter**.
+
+5. Wait until you see:
+
+```text
+ZMQ STREAMING MODE: ENABLED
+```
+
+Keep this terminal running.
+
+---
+
+### 25. Workstation Terminal 2 — Start the Ψ0 Policy Server
+
+The policy server loads the trained Ψ0 checkpoint on the GPU, receives observations, and predicts actions.
+
+Go to the Ψ0 repository:
+
+```bash
+cd ~/Psi0
+```
+
+Set the selected checkpoint directory and step.
+
+Example checkpoint configuration:
+
+```bash
+export CHECKPOINT_DIR="$HOME/Psi0/.runs/sonic/orange-box-pickup.real.flow1000.cosine.lr1.0e-04.b64.gpus1.2607262327"
+export CHECKPOINT_STEP=50000
+```
+
+For a newly trained model, replace those values with the run directory and checkpoint step selected in Part III.
+
+Start the policy server:
 
 ```bash
 bash ./scripts/deploy/serve_psi0-rtc-sonic.sh
 ```
 
-##### Start whole-body controller on robot for $\Psi_0$ with SONIC (RTC mode)
+Wait until the policy server is ready before starting the communication client.
 
-```bash
-bash ./real/scripts/deploy_psi0-sonic-rtc-robot.sh
+Keep this terminal running.
+
+---
+
+### 26. Workstation Terminal 3 — Start the SONIC Communication Client
+
+The communication client:
+
+```text
+G1 camera + robot state
+        ↓
+SONIC communication client
+        ↓
+Ψ0 policy server
+        ↓
+predicted actions
+        ↓
+SONIC communication client
+        ↓
+G1 controller
 ```
 
-##### Start Policy Client of $\Psi_0$ with SONIC (RTC mode)
+Start it with:
 
 ```bash
+cd ~/Psi0
 bash ./real/scripts/deploy_psi0-sonic-rtc-client.sh
 ```
 
-## Baselines
+Keep this terminal running during inference.
 
-<a id="groot-n16"></a>
+---
 
-### GR00T
-Install the env 
-```bash
-cd src/gr00t; uv sync
-```
-1. training
-```bash
-cd src/gr00t
-./scripts/train_gr00t.sh --dataset-path /your/lerobot/dataset
-```
-2. serving a checkpoint
-```bash
-cd src/gr00t
-./scripts/deploy_gr00t.sh
-```
+### 27. Deployment Checklist
 
-3. openloop eval on trained checkpoint using gt
-```bash
-cd src/gr00t
-./scripts/openloop_eval.sh
-```
+Before starting inference, verify:
 
-<a id="openpi-05"></a>
+**Robot**
 
-### OpenPI $\pi_{0.5}$
+- [ ] RealSense camera server running.
+- [ ] DEX1 gripper server running.
 
-Please see more detailed instructions here: [baselines/pi05](baselines/pi05/README.md).
+**Workstation**
 
-### InternVLA-M1
-Install the env 
-```bash
-cd src/InternVLA-M1; uv sync --python 3.10
-```
-1. training
-```bash
-cd src/InternVLA-M1
-bash scripts/train_internvla.sh
-```
-2. serving a checkpoint
-```bash
-cd src/InternVLA-M1
-./scripts/deploy_internvla.sh
+- [ ] SONIC controller reached `Init done`.
+- [ ] `CONTROL` state entered.
+- [ ] `ZMQ STREAMING MODE: ENABLED`.
+- [ ] Ψ0 policy server ready.
+- [ ] SONIC communication client running.
+
+---
+
+### 28. Stop Deployment
+
+#### Normal Stop
+
+Go to the **SONIC Communication Client** terminal and press:
+
+```text
+Ctrl+C
 ```
 
-### H-RDT
+The communication client stops and robot motion stops.
 
-See quick-start doc for [baseline/hrdt](examples/quick_start/hrdt.md).
+#### Emergency Stop
 
-### EgoVLA
+Go to the **SONIC Controller** terminal and press:
 
-See quick-start doc for [baseline/egovla](examples/quick_start/egovla.md).
-
-### Diffusion Policy
-See dedicated doc here [baseline/dp](baselines/dp/README.md)
-
-### ACT
-See dedicated doc here [baseline/act](baselines/act/README.md)
-
-## Simulation
-
-We use [SIMPLE](https://github.com/physical-superintelligence-lab/SIMPLE) to benchmark $\Psi_0$ and all the baselines.
-
-> 📢 SIMPLE is an easy-to-use humanoid benchmarking simulator built on the MuJoCo physics engine and Isaac Sim rendering.
-
-### Install SIMPLE
-
-Currently, there are two options to integrate SIMPLE and Psi-0.
-
-#### [Option 1] Install stand-alone SIMPLE (Best for collecting data through teleoperation)
-
-> We recommend to install [SIMPLE](https://github.com/physical-superintelligence-lab/SIMPLE) on stand alone desktop with a NVIDIA GPU (3090/4090/5090). 
-
-Please refer to the SIMPLE repo [here](https://github.com/physical-superintelligence-lab/SIMPLE)
-
-#### [Option 2] Install SIMPLE as third-party dependency (Best for evaluting Psi-0 and all baselines)
-
-Please refer the more details steps [here](examples/quick_start/psi.md).
-
-### Data Generation
-> 📂 We also provide 6 pre-collected whole-body humanoid loco-manipulation tasks at [Huggingface psi-data](https://huggingface.co/datasets/USC-PSI-Lab/psi-data/tree/main/simple). If you want to use the existing simulation data, jump to the [Fine-Tuning](#training-sim)
-
-#### Motion-Planning Based Data Generation
-Please refert to the SIMPLE docs.
-
-#### Teleoperation in Simulator
-Please refert to the SIMPLE docs.
-
-<a id="training-sim"></a>
-### Fine-Tuning
-
-> 👉 You can skip fine-tuning and download our released [checkpoints for SIMPLE](https://huggingface.co/USC-PSI-Lab/psi-model/tree/main/psi0/simple-checkpoints).
-
-Download [SIMPLE task data](https://huggingface.co/datasets/USC-PSI-Lab/psi-data/tree/main/simple) and extract it:
-
-> 💡 Dont forget `source .env` first before following below commands.
-
-```
-export task=G1WholebodyXMovePickTeleop-v0
-
-hf download USC-PSI-Lab/psi-data \
-  simple/$task.zip \
-  --local-dir=$PSI_HOME/data \
-  --repo-type=dataset
-
-unzip $PSI_HOME/data/simple/$task.zip -d $PSI_HOME/data/simple
+```text
+o
 ```
 
-> 👀 If you want to visualize the episode please refer to the [Data Visualization](examples/visualize.md) in the examples.
+The robot enters damping mode.
 
-Start training:
+After robot motion has stopped, terminate the remaining policy server, camera, gripper, and controller processes as appropriate for your setup.
 
-> Please [set up the envrionment variables](#training-real) if not done so yet.
+---
 
-```
-bash scripts/train/psi0/finetune-simple-psi0.sh $task
-```
-The training will create a run dir which is located under `.runs` in the project root.
-If your GPU has limited VRAM, set `--train.optimizer-foreach=false` to reduce optimizer-step memory usage at the cost of some speed.
+## Part V — Quick Reference
 
-### Evaluation in SIMPLE
+### Teleoperation / Data Collection Processes
 
-#### Serve $\Psi_0$
-```
-export run_dir=<the run dir here under folder .runs>
-export ckpt_step=<checkpoint step>
-uv run --active --group psi --group serve serve_psi0 \
-  --host 0.0.0.0 \
-  --port 22085 \
-  --run-dir=$run_dir \
-  --ckpt-step=$ckpt_step \
-  --action-exec-horizon=24 \
-  --rtc
-```
-
-Run open-loop evaluation (offline)
-
-[examples/simple/openloop_eval.ipynb](examples/simple/openloop_eval.ipynb)
-
-#### Run the Evaluation in SIMPLE
-
-This `quick-start` guide assumes running SIMPLE on a Stand-alone workstation with NVIDIA GPU.
-
-> We recommend serving the VLA models on a remote server other than locally as IsaacSim is also resource demanding. 
-
-> If the server is started on a remote server, run ssh port forward. eg., `ssh -L 22086:localhost:22086 songlin@nebula100`.
-
-> Once port forward is done, open a new terminal to test if server is up `curl -i http://localhost:22085/health`
-
-Download eval tasks from [USC-PSI-Lab/psi-data](https://huggingface.co/datasets/USC-PSI-Lab/psi-data/tree/main/simple-eval).
-
-
-```
-cd /path/to/SIMPLE
-export task=G1WholebodyXMovePickTeleop-v0
-```
-
-Download eval data and extract it:
-```
-hf download USC-PSI-Lab/psi-data \
-	simple-eval/$task.zip \
-	--local-dir=data/evals \
-	--repo-type=dataset
-
-unzip data/evals/simple-eval/$task.zip -d data/evals/simple-eval
-```
-
-Now start SIMPLE eval in the SIMPLE environment:
-
-> We provide three domain randomization levels: `level-0`, `level-1`, `level-2` for each task
-
-```
-export dr=level-0
-```
-We use two different entrypoints for evaluating different tasks:
-
-set entrypoint and agent to `eval_decoupled_wbc.py` and `psi0_decoupled_wbc` if the evaluating task ends with `Teleop`, which means the task data is collected using teleoperation:
-```
-export entry=eval_decoupled_wbc.py
-export agent=psi0_decoupled_wbc
-```
-
-and set entrypoint and agent to `eval.py` and `psi0` if the evaluating task ends with `MP`, which means the task data is generated using CuRobo Motion planning:
-```
-export entry=eval.py
-export agent=psi0
-```
-
-Launch the evaluation script:
-```
-python src/simple/cli/$entry \
-	simple/$task \
-	$agent \
-	$dr \
-	--host=localhost \
-	--port=9000 \
-	--sim-mode=mujoco_isaac \
-	--no-headless \
-	--data-format=lerobot \
-	--data-dir=data/evals/simple-eval/$task/$dr
-```
-
-The policy rollout videos will be found in folder `third_party/SIMPLE/data/evals/psi0`.
-
-> The evaluation for a single episode could take up to 6~10 minutes because SIMPLE use a synchronous rendering API in IsaacSim. See here for [more explanation](#).
-
-<a id="pre-post-train"></a>
-## Reproduce Ψ₀: Pre-Training and Post-Training
-
-
-### Pre-Train VLM
-
-Download and cache the official `Qwen/Qwen3-VL-2B-Instruct` weights.
-```
-scripts/predownload_qwen3vl.py
-```
-
-Pre-train on the [EgoDex dataset](https://github.com/apple/ml-egodex)
-
-Pre-compute `48 DoF EgoDex action`:
-
-> We re-use the pre-process code from [H-RDT EgoDex Pre-Processing](https://github.com/HongzheBi/H_RDT?tab=readme-ov-file#data-preprocessing).
-> 1. Change the paths in `src/h_rdt/datasets/pretrain/setup_pretrain.sh`.
-> 2. Tweak the `NUM_PROCESSES` if on a powerful server, i tried max 64.
-> 3. set `FORCE_OVERWRITE=True` if the processing script is disrupted.
-
-```
-source src/h_rdt/datasets/pretrain/setup_pretrain.sh
-source .venv-psi/bin/activate
-bash src/h_rdt/datasets/pretrain/run_pretrain_pipeline.sh
-```
-
-> [Optinal] If you also want to train `FAST` tokenizer, please refer to [traing FAST](src/fast/README.md).
-
-```
-bash scripts/train/psi0/pretrain-egodex-psi0-fast.sh 
-```
-
-Pre-train on [humanoid everyday dataset](https://huggingface.co/datasets/USC-GVL/humanoid-everyday)
-
-> Please download the pre-processed HE data here:  `hf download USC-PSI-Lab/psi-data HE_RAW.zip --repo-type=dataset`
-
-```
-bash scripts/train/psi0/pretrain-he-psi0-fast.sh
-```
-
-Save the pretrained checkpoints once training is done:
-```
-python scripts/save_pretrain_qwen3vl_backbone.py
-```
-
-### Post-Train Action Expert
-
-Download pre-trained `psi-0` VLM backbone
-```
-python scripts/data/download.py \
-  --repo-id=USC-PSI-Lab/psi-model \
-  --remote-dir=psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
-  --local-dir=$PSI_HOME/cache/checkpoints/psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k \
-  --repo-type=model
-```
-
-Post-train on [humanoid everyday (HE) dataset](https://huggingface.co/datasets/USC-GVL/humanoid-everyday)
-```
-bash scripts/train/psi0/posttrain-he-psi0.sh
-```
-
-Save post-trained action header once training is over
-```
-python scripts/save_posttrain_action_expert.py
-```
-
-## Checkpoints
-
-The released checkpoints on [HuggingFace Psi-Model](https://huggingface.co/USC-PSI-Lab/psi-model) is listed
-
-| Checkpoint | Description | Remote Directory |
+| Machine | Terminal | Process |
 |---|---|---|
-| $\Psi_0$ VLM<br/>(Baseline) | Pre-trained VLM backbone (EgoDex 200K steps + HE 30K steps) | `psi0/pre.fast.1by1.2601091803.ckpt.ego200k.he30k` |
-| $\Psi_0$ Action Expert<br/>(Baseline) | Post-trained Action Expert On HE | `psi0/postpre.1by1.pad36.2601131206.ckpt.he30k` |
+| Robot | 1 | `composed_camera` RealSense server on port 5555 |
+| Robot | 2 | DEX1 gripper server |
+| Workstation | 1 | SONIC controller with `--input-type zmq_manager real` |
+| Workstation | 2 | PICO / PICO mirror teleoperation |
+| Workstation | 3 | Data exporter |
 
-and more variants for ablation studies:
-| Checkpoint | Description | Remote Directory |
+### Ψ0 Deployment Processes
+
+| Machine | Terminal | Process |
 |---|---|---|
-| $\Psi_0$ VLM<br/>(Ablation Study) | Pre-trained VLM backbone only on EgoDex 200K steps | `psi0/pre.fast.egodex.2512241941.ckpt200k` |
-| $\Psi_0$ VLM<br/>(Ablation Study) | Pre-trained VLM backbone only on HE 48K steps  | `psi0/pre.abl.only.he.2512311516.48k` |
-| $\Psi_0$ VLM<br/>(Ablation Study) | Pre-trained VLM backbone only on 10% EgoDex  | `psi0/pre.abl.ego.10per.2602021632.46k` |
-| $\Psi_0$ Action Expert<br/>(Ablation Study) | Post-train on HE by picking pre-trained variant `psi0/pre.abl.only.he.2512311516.48k` | `psi0/postpre.abl.only.he.2602050012` |
-| $\Psi_0$ Action Expert<br/>(Ablation Study) | Post-train on HE by picking pre-trained variant `psi0/pre.abl.ego.10per.2602021632.46k` | `psi0/postpre.abl.ego.10per.2602050006` |
+| Robot | 1 | `realsense_server.py` |
+| Robot | 2 | DEX1 gripper server |
+| Workstation | 1 | SONIC controller with `./deploy.sh real --hand-type dex1` |
+| Workstation | 2 | Ψ0 policy server |
+| Workstation | 3 | SONIC communication client |
 
+### Dataset / Training Flow
 
-Download the selected models
-
-> Edit `.env` to use `HF_ENDPOINT=https://hf-mirror.com` if needed.
-
-```
-python scripts/data/download.py \
-  --repo-id=USC-PSI-Lab/psi-model \
-  --remote-dir=<Remote Directory> \
-  --local-dir=$PSI_HOME/cache/checkpoints/<Remote Directory> \
-  --repo-type=model
-```
-
-## Troubleshootings
-
-1. Lerobot dataset issues: `stack(): argument 'tensors' (position 1) must be tuple of Tensors, not Column`
-
-This usually means the environment is still on the legacy PSI `lerobot` stack. Resync the PSI env so it uses the
-same `lerobot` and `datasets` versions as SIMPLE, then verify the import layout:
-
-```bash
-source .venv-psi/bin/activate
-uv sync --group psi --active
-python -c "from psi.data.lerobot.compat import LEROBOT_LAYOUT; print(LEROBOT_LAYOUT)"
+```text
+SONIC recording directories
+    ↓ process_dataset.py
+merged SONIC dataset
+    ↓ edit tasks.jsonl / episodes.jsonl
+language instruction
+    ↓ raw_sonic_to_psi_lerobot.py
+Ψ0 LeRobot dataset
+    ↓ calc_modality_stats.py
+stats.json + stats_psi0.json
+    ↓ finetune-real-sonic-psi0.sh
+training run
+    ↓ select validation checkpoint
+CHECKPOINT_DIR + CHECKPOINT_STEP
+    ↓ serve_psi0-rtc-sonic.sh
+Ψ0 policy server
 ```
 
-2. Fail to install `evdev`, `src/evdev/input.c:10:10: fatal error: Python.h: No such file or directory`
 
-```
-sudo apt update
-sudo apt install -y python3-dev python3-venv build-essential \
-    linux-headers-$(uname -r)
-```
-
-3. RuntimeError: Could not load libtorchcodec. Likely causes ...
-```
-sudo apt-get install ffmpeg
-```
-
-4. ImportError: cannot import name 'Deprecated' from 'wandb.proto.wandb_telemetry_pb2' 
-
-re-install `wandb`
-```
-source .venv-pusht/bin/activate
-uv pip uninstall wandb
-uv pip install wandb==0.18.0
-```
-
-5. support `sm_120` on newer GPUs like `5090` or `RTX 6000`, UserWarning: Ignoring invalid value for boolean flag CUDA_LAUNCH_BLOCKING: truevalid values are 0 or 1.
-
-update `torch` and `flash-attn`
-```
-uv pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128
-uv pip install flash-attn --no-build-isolation
-```
-
-6. Failed to download and build `lerobot ... `, Use `git lfs logs last` to view the log.
-
-```
-GIT_LFS_SKIP_SMUDGE=1 uv ...
-```
-## Citation
-
-```
-@article{wei2026psi0,
-  title={{$\Psi_0$}: An Open Foundation Model Towards Universal Humanoid Loco-Manipulation},
-  author={Wei, Songlin and Jing, Hongyi and Li, Boqian and Zhao, Zhenyu and Mao, Jiageng and Ni, Zhenhao and He, Sicheng and Liu, Jie and Liu, Xiawei and Kang, Kaidi and others},
-  journal={arXiv preprint arXiv:2603.12263},
-  year={2026}
-}
-```
-
-## License
-
-This project is licensed under the Apache License 2.0.
-
-See the [LICENSE](LICENSE) file for details.
